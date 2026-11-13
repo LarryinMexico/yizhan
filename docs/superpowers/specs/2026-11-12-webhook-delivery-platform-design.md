@@ -73,9 +73,9 @@ Redis: rate limits, idempotency-key cache, endpoint circuit state
 
 **Retry scheduler.** Polls PostgreSQL for deliveries whose `next_attempt_at` has passed, using `FOR UPDATE SKIP LOCKED`, and republishes them to Kafka. Kafka has no delayed delivery, so retry timing is kept in the database. The alternative, tiered retry topics, is recorded in an ADR.
 
-**Redis.** Per-application rate limiting on the API, per-endpoint rate limiting on delivery, the idempotency-key cache, and (phase 3) circuit-breaker state for failing endpoints.
+**Redis.** Per-application rate limiting and daily quotas on the API, and (phase 3) per-endpoint health and circuit-breaker state. Idempotency keys are enforced by a PostgreSQL unique constraint, not a Redis cache.
 
-**Dashboard.** Phase 1: a minimal server-rendered page listing deliveries and attempts. Phase 2: a React and TypeScript dashboard with delivery logs, per-endpoint success rate, and replay.
+**Dashboard.** Phase 1: a minimal static page listing deliveries and attempts through the JSON API. Phase 2: a React and TypeScript dashboard with delivery logs, per-endpoint success rate, and replay.
 
 **Release Radar (phase 2).** Pollers read the PyPI, npm, and GitHub release feeds and publish events through Yizhan's public API, the same way any customer would. Users sign in with GitHub and subscribe a package to a URL. Slack and Discord are supported through payload templates, since both accept plain HTTP webhooks.
 
@@ -84,6 +84,8 @@ Redis: rate limits, idempotency-key cache, endpoint circuit state
 In phase 1 the API writes to PostgreSQL and then publishes to Kafka as two separate steps. A crash between them loses the Kafka record while the database says the delivery is pending. Phase 2 first demonstrates this loss with a failure experiment, then fixes it with a transactional outbox: the API writes an outbox row in the same transaction, and a relay publishes outbox rows to Kafka. The gap is left in deliberately so the owner sees the failure before learning the fix.
 
 ## 6. Data model
+
+This is a summary. The exact schema, routes, record formats, and algorithms are in `docs/design/contracts.md`, which is normative and wins where the two differ (for example: replay creates a new delivery row; endpoints are soft-deleted).
 
 - `applications(id, name, created_at)`
 - `api_keys(id, application_id, key_hash, created_at, revoked_at)`
@@ -117,14 +119,17 @@ Exit criteria: an event sent to the public API reaches a real endpoint; a failin
 
 In priority order; items at the bottom are cut first if time runs out.
 
-1. Kubernetes: migrate from Docker Compose to k3s with Helm charts.
-2. Observability: Prometheus metrics, Grafana dashboards, OpenTelemetry traces.
-3. Transactional outbox, preceded by the experiment that shows the phase 1 loss.
-4. Load tests and failure experiments, with results in the experiment log.
+1. Metrics and dashboards (Prometheus, Grafana), because nothing below can be judged without numbers.
+2. Transactional outbox, preceded by the experiment that shows the phase 1 loss.
+3. Load tests and failure experiments, with results in the experiment log.
+4. Kubernetes: migrate from Docker Compose to k3s with Helm charts.
 5. Release Radar.
 6. React dashboard.
 7. Worker autoscaling on Kafka consumer lag (KEDA).
 8. Terraform for the cloud resources.
+9. Tracing with OpenTelemetry.
+
+Items 1–5 are required; 6–9 are done only if time remains. Details: `docs/superpowers/plans/2026-11-13-phase2-production-depth.md`.
 
 Owner hand-writes: the outbox relay, and runs and writes up every experiment.
 
